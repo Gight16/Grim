@@ -52,9 +52,12 @@ public final class GrimConfigSpecs {
      * <p>v10 → v11: adds {@code update-permission-ticks} to the bundled
      * config. No explicit migration is needed; the updater's default rewrite
      * adds the key, and auto-lift preserves an existing user value if present.
+     *
+     * <p>v11 → v12: adds {@code AttackLineOfSight} defaults. Auto-lift preserves
+     * existing values if an operator already configured the check.
      */
     public static @NotNull ConfigUpdater.Spec mainConfig() {
-        return ConfigUpdater.Spec.builder("/config/", 11, ConfigUpdater.ConfigFlavor.V2)
+        return ConfigUpdater.Spec.builder("/config/", 12, ConfigUpdater.ConfigFlavor.V2)
                 .migration(10, ctx -> {
                     String typeRaw = ctx.input().getString("history.database.type");
                     String type = typeRaw == null ? null : typeRaw.trim().toUpperCase(Locale.ROOT);

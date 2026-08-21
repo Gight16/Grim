@@ -81,6 +81,15 @@ Punishments:
       - "1:1 [log]"
       - "5:3 [webhook]"
       - "5:3 [proxy]"
+  AttackLineOfSight:
+    remove-violations-after: 300
+    checks:
+      - "AttackLineOfSight"
+    commands:
+      - "5:3 [alert]"
+      - "1:1 [log]"
+      - "5:3 [webhook]"
+      - "5:3 [proxy]"
   Misc:
     remove-violations-after: 300
     checks:

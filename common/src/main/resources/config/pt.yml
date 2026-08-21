@@ -186,6 +186,13 @@ Reach:
     # A menos que estiver em um servidor focado em PvP, esse pacote adicional não é recomendado.
     enable-post-packet: false
 
+AttackLineOfSight:
+    # Extra target hitbox margin used only for line-of-sight ray tracing, never reach distance.
+    hitbox-expansion: 0.03
+    block-invalid-hits: true
+    decay: 0.05
+    setbackvl: -1
+
 exploit:
     # Você pode ganhar altas velocidades se pular correndo com uma elytra, previne isso de ocorrer quando definido falso.
     # A Mojang vacilou com o netcode por fazer a Elytra iniciar pelo lado do cliente.
@@ -245,4 +252,4 @@ max-ping-firework-boost: 1000
 update-permission-ticks: -1
 
 config-flavor: V2
-config-version: 11
+config-version: 12

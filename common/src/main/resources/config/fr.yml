@@ -183,6 +183,13 @@ Reach:
     # À moins d'être un serveur axé sur le PvP en 1.8, l'envoi de ce paquet supplémentaire n'est pas recommandé.
     enable-post-packet: false
 
+AttackLineOfSight:
+    # Extra target hitbox margin used only for line-of-sight ray tracing, never reach distance.
+    hitbox-expansion: 0.03
+    block-invalid-hits: true
+    decay: 0.05
+    setbackvl: -1
+
 exploit:
     allow-sprint-jumping-when-using-elytra: true
     # Cette option atténue le placement du joueur sur les ghostblocks en resynchronisant le joueur lorsque cela se produit.
@@ -237,4 +244,4 @@ max-ping-firework-boost: 1000
 update-permission-ticks: -1
 
 config-flavor: V2
-config-version: 11
+config-version: 12

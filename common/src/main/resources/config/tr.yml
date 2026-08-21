@@ -182,6 +182,13 @@ Reach:
     # 1.8 PvP odaklı bir sunucu değilseniz, bu ek paket önerilmez
     enable-post-packet: false
 
+AttackLineOfSight:
+    # Extra target hitbox margin used only for line-of-sight ray tracing, never reach distance.
+    hitbox-expansion: 0.03
+    block-invalid-hits: true
+    decay: 0.05
+    setbackvl: -1
+
 exploit:
     # Elytra ile sprint zıplarken yüksek hızlar kazanabilirsiniz, bu ayar false olarak ayarlandığında bu istismarı önler
     # Mojang, elytra'nın istemci tarafında başlamasını ve sunucu tarafında bitmesini sağlayarak netcode'u bozdu
@@ -239,4 +246,4 @@ max-ping-firework-boost: 1000
 update-permission-ticks: -1
 
 config-flavor: V2
-config-version: 11
+config-version: 12

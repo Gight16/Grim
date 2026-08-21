@@ -56,6 +56,7 @@ public class PacketEntity extends TypedPacketEntity {
     public boolean isDead = false;
     public boolean isBaby = false;
     public boolean hasGravity = true;
+    private int ticksSinceTeleport = 100;
     private ReachInterpolationData oldPacketLocation;
     private ReachInterpolationData newPacketLocation;
     private Object2IntMap<PotionType> potionsMap = null;
@@ -160,6 +161,7 @@ public class PacketEntity extends TypedPacketEntity {
                 }
                 trackedServerPosition.setPos(vec3d);
             } else {
+                ticksSinceTeleport = 0;
                 trackedServerPosition.setPos(new Vector3d(relX, relY, relZ));
                 // ViaVersion desync's here for teleports
                 // It simply teleports the entity with its position divided by 32... ignoring the offset this causes.
@@ -211,6 +213,7 @@ public class PacketEntity extends TypedPacketEntity {
 
     // If the old and new packet location are split, we need to combine bounding boxes
     public void onMovement(boolean tickingReliably) {
+        if (ticksSinceTeleport < Integer.MAX_VALUE) ticksSinceTeleport++;
         newPacketLocation.tickMovement(oldPacketLocation == null, tickingReliably);
 
         // Handle uncertainty of second transaction spanning over multiple ticks
@@ -222,6 +225,10 @@ public class PacketEntity extends TypedPacketEntity {
 
     public boolean hasPassenger(PacketEntity entity) {
         return passengers.contains(entity);
+    }
+
+    public boolean hasRecentlyTeleported() {
+        return ticksSinceTeleport <= 1;
     }
 
     public void mount(PacketEntity vehicle) {

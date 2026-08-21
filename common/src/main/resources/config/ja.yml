@@ -187,6 +187,13 @@ Reach:
     # PvP特化の1.8サーバーでない限り、この追加パケットの有効化は推奨されません
     enable-post-packet: false
 
+AttackLineOfSight:
+    # Extra target hitbox margin used only for line-of-sight ray tracing, never reach distance.
+    hitbox-expansion: 0.03
+    block-invalid-hits: true
+    decay: 0.05
+    setbackvl: -1
+
 exploit:
     # エリトラでダッシュジャンプを行うと非常に高い速度を得られるエクスプロイト（意図しない挙動）があります。
     # この設定をfalseにすると、そのエクスプロイトを防ぎます
@@ -247,4 +254,4 @@ max-ping-firework-boost: 1000
 update-permission-ticks: -1
 
 config-flavor: V2
-config-version: 11
+config-version: 12

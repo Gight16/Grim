@@ -182,6 +182,14 @@ Reach:
     # Unless you are a 1.8 PvP focused server, this additional packet is not recommended
     enable-post-packet: false
 
+AttackLineOfSight:
+    # Extra target hitbox margin used only for line-of-sight ray tracing, never reach distance.
+    hitbox-expansion: 0.03
+    # Cancel attacks when a collidable block is confirmed between the player and target.
+    block-invalid-hits: true
+    decay: 0.05
+    setbackvl: -1
+
 exploit:
     # You can gain high speeds when sprint jumping with an elytra, this prevents the exploit when set to false
     # Mojang screwed up netcode by making elytra start client sided and elytra end server sided
@@ -236,4 +244,4 @@ update-permission-ticks: -1
 #   config-version: bumped on every breaking shape change. Old configs
 #                   auto-migrate up via the bundled updater on next start.
 config-flavor: V2
-config-version: 11
+config-version: 12

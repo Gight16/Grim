@@ -195,7 +195,6 @@ Reach:
     block-impossible-hits: true
     # 我们应该取消不合法的攻击吗？
     # 攻击距离为3.00-3.03可能不会被取消，但仍会被作弊标记，因为有数据包顺序限制
-    enable-post-packet: false
     # 这将在每个游戏刻（tick）结束时发送一个额外的数据包，以检查更多的作弊
     # 这会注入服务器的连接列表以在服务器刷新之前发送最终数据
     # 启用这将增加所有玩家的带宽占用
@@ -203,6 +202,14 @@ Reach:
     # 启用此功能将检查到更多作弊者。
     # 禁用此功能仍会检查到作弊者，不会导致误报
     # 除非你是专注于1.8版本的PvP服务器，否则不建议使用这个额外的数据包
+    enable-post-packet: false
+
+AttackLineOfSight:
+    # Extra target hitbox margin used only for line-of-sight ray tracing, never reach distance.
+    hitbox-expansion: 0.03
+    block-invalid-hits: true
+    decay: 0.05
+    setbackvl: -1
 
 exploit:
     allow-sprint-jumping-when-using-elytra: true
@@ -256,4 +263,4 @@ max-ping-firework-boost: 1000
 update-permission-ticks: -1
 
 config-flavor: V2
-config-version: 11
+config-version: 12
