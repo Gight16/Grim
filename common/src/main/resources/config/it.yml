@@ -167,8 +167,51 @@ AttackLineOfSight:
     # Extra target hitbox margin used only for line-of-sight ray tracing, never reach distance.
     hitbox-expansion: 0.03
     block-invalid-hits: true
+    # Violations required before cancelling the hit. 0 cancels from the first detection, -1 never cancels.
+    cancelvl: 0
     decay: 0.05
-    setbackvl: -1
+    setbackvl: 0
+
+PlaceLineOfSight:
+    # Extra margin on the clicked block's hitbox, used only by the line-of-sight aim test.
+    hitbox-expansion: 0.03
+    # false: only blocks that also stop movement can occlude the ray (fewest false positives).
+    # true: every block the client can pick occludes, matching vanilla ray tracing more closely.
+    strict: true
+    # Cancel and resync placements made through a block.
+    block-invalid-actions: true
+    # Violations required before cancelling. 0 cancels from the first detection, -1 never cancels.
+    cancelvl: 0
+    decay: 0.05
+    setbackvl: 0
+
+BreakLineOfSight:
+    # Extra margin on the clicked block's hitbox, used only by the line-of-sight aim test.
+    hitbox-expansion: 0.03
+    # false: only blocks that also stop movement can occlude the ray (fewest false positives).
+    # true: every block the client can pick occludes, matching vanilla ray tracing more closely.
+    strict: true
+    # Cancel and resync digging done through a block.
+    block-invalid-actions: true
+    # Violations required before cancelling. 0 cancels from the first detection, -1 never cancels.
+    cancelvl: 0
+    decay: 0.05
+    setbackvl: 0
+
+InteractLineOfSight:
+    # Covers right clicks on a block with an item that does not place a block (chests, buttons,
+    # doors, buckets, flint and steel). Block placements belong to PlaceLineOfSight.
+    # Extra margin on the clicked block's hitbox, used only by the line-of-sight aim test.
+    hitbox-expansion: 0.03
+    # false: only blocks that also stop movement can occlude the ray (fewest false positives).
+    # true: every block the client can pick occludes, matching vanilla ray tracing more closely.
+    strict: true
+    # Cancel and resync interactions made through a block.
+    block-invalid-actions: true
+    # Violations required before cancelling. 0 cancels from the first detection, -1 never cancels.
+    cancelvl: 0
+    decay: 0.05
+    setbackvl: 0
 
 exploit:
     # Abilita il salto in sprint con l'elytra
@@ -225,4 +268,4 @@ max-ping-firework-boost: 1000
 update-permission-ticks: -1
 
 config-flavor: V2
-config-version: 12
+config-version: 13

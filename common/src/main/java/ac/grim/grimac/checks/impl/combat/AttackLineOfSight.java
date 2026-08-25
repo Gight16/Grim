@@ -57,6 +57,7 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
     private final SimpleCollisionBox[] blockCollisionBoxes =
             new SimpleCollisionBox[ComplexCollisionBox.DEFAULT_MAX_COLLISION_BOX_SIZE];
     private boolean blockInvalidHits;
+    private int cancelVL;
     private double hitboxExpansion;
 
     public AttackLineOfSight(GrimPlayer player) {
@@ -110,7 +111,7 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
         }
 
         if (initialResult.hitTarget()) {
-            if (flagBlocked(entity, initialResult) && blockInvalidHits && shouldModifyPackets()) {
+            if (flagBlocked(entity, initialResult, false) && shouldCancelHit()) {
                 event.setCancelled(true);
                 player.onPacketCancel();
             }
@@ -135,11 +136,12 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
             } else if (result.hitTarget() && result.blockingHit() == null) {
                 reward();
             } else if (queued.initialResult().hitTarget()) {
-                flagBlocked(entity, queued.initialResult());
+                flagBlocked(entity, queued.initialResult(), true);
             } else if (result.hitTarget()) {
-                flagBlocked(entity, result);
+                flagBlocked(entity, result, true);
             } else {
-                flag(V.write(verbose(), AIM_MISS)
+                // The ATTACK packet is long gone by now, so a setback is the only enforcement left.
+                flagWithSetback(V.write(verbose(), AIM_MISS)
                         .uint(VerboseCodecs.entity(entity.getType(), player.getClientVersion())));
             }
         }
@@ -148,14 +150,19 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
         analyzedTargets.clear();
     }
 
-    private boolean flagBlocked(PacketEntity entity, LineOfSightResult result) {
+    /**
+     * @param retroactive the ATTACK packet has already been forwarded, so cancellation is no longer
+     *                    possible and the flag must fall back to a setback to enforce anything
+     */
+    private boolean flagBlocked(PacketEntity entity, LineOfSightResult result, boolean retroactive) {
         HitData hit = result.blockingHit();
         Vector3i pos = hit.position();
-        return flag(V.write(verbose(), BLOCKED)
+        var writer = V.write(verbose(), BLOCKED)
                 .uint(VerboseCodecs.entity(entity.getType(), player.getClientVersion()))
                 .sint(VerboseCodecs.block(hit.state().getType(), player.getClientVersion()))
                 .mcPos(pos.getX(), pos.getY(), pos.getZ())
-                .f64(result.blockDistance()));
+                .f64(result.blockDistance());
+        return retroactive ? flagWithSetback(writer) : flag(writer);
     }
 
     private boolean canCheck(PacketEntity entity) {
@@ -366,9 +373,15 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
         });
     }
 
+    // Cancellation is instant: the offending ATTACK packet is dropped in the same receive call.
+    private boolean shouldCancelHit() {
+        return blockInvalidHits && cancelVL >= 0 && violations >= cancelVL && shouldModifyPackets();
+    }
+
     @Override
     public void onReload(@NotNull ConfigManager config) {
         blockInvalidHits = config.getBooleanElse("AttackLineOfSight.block-invalid-hits", true);
+        cancelVL = config.getIntElse("AttackLineOfSight.cancelvl", 0);
         hitboxExpansion = Math.max(0, config.getDoubleElse("AttackLineOfSight.hitbox-expansion", 0.03));
     }
 

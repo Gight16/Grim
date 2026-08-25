@@ -187,8 +187,59 @@ AttackLineOfSight:
     hitbox-expansion: 0.03
     # Cancel attacks when a collidable block is confirmed between the player and target.
     block-invalid-hits: true
+    # Violations required before cancelling the hit. 0 cancels from the first detection, -1 never cancels.
+    cancelvl: 0
     decay: 0.05
-    setbackvl: -1
+    # Violations required before setting the player back on a detection that arrived too
+    # late to cancel the packet. 0 sets back from the first such detection, -1 never sets back.
+    setbackvl: 0
+
+PlaceLineOfSight:
+    # Extra margin on the clicked block's hitbox, used only by the line-of-sight aim test.
+    hitbox-expansion: 0.03
+    # false: only blocks that also stop movement can occlude the ray (fewest false positives).
+    # true: every block the client can pick occludes, matching vanilla ray tracing more closely.
+    strict: true
+    # Cancel and resync placements made through a block.
+    block-invalid-actions: true
+    # Violations required before cancelling. 0 cancels from the first detection, -1 never cancels.
+    cancelvl: 0
+    decay: 0.05
+    # Violations required before setting the player back on a detection that arrived too
+    # late to cancel the packet. 0 sets back from the first such detection, -1 never sets back.
+    setbackvl: 0
+
+BreakLineOfSight:
+    # Extra margin on the clicked block's hitbox, used only by the line-of-sight aim test.
+    hitbox-expansion: 0.03
+    # false: only blocks that also stop movement can occlude the ray (fewest false positives).
+    # true: every block the client can pick occludes, matching vanilla ray tracing more closely.
+    strict: true
+    # Cancel and resync digging done through a block.
+    block-invalid-actions: true
+    # Violations required before cancelling. 0 cancels from the first detection, -1 never cancels.
+    cancelvl: 0
+    decay: 0.05
+    # Violations required before setting the player back on a detection that arrived too
+    # late to cancel the packet. 0 sets back from the first such detection, -1 never sets back.
+    setbackvl: 0
+
+InteractLineOfSight:
+    # Covers right clicks on a block with an item that does not place a block (chests, buttons,
+    # doors, buckets, flint and steel). Block placements belong to PlaceLineOfSight.
+    # Extra margin on the clicked block's hitbox, used only by the line-of-sight aim test.
+    hitbox-expansion: 0.03
+    # false: only blocks that also stop movement can occlude the ray (fewest false positives).
+    # true: every block the client can pick occludes, matching vanilla ray tracing more closely.
+    strict: true
+    # Cancel and resync interactions made through a block.
+    block-invalid-actions: true
+    # Violations required before cancelling. 0 cancels from the first detection, -1 never cancels.
+    cancelvl: 0
+    decay: 0.05
+    # Violations required before setting the player back on a detection that arrived too
+    # late to cancel the packet. 0 sets back from the first such detection, -1 never sets back.
+    setbackvl: 0
 
 exploit:
     # You can gain high speeds when sprint jumping with an elytra, this prevents the exploit when set to false
@@ -244,4 +295,4 @@ update-permission-ticks: -1
 #   config-version: bumped on every breaking shape change. Old configs
 #                   auto-migrate up via the bundled updater on next start.
 config-flavor: V2
-config-version: 12
+config-version: 13

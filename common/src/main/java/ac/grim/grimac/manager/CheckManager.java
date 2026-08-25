@@ -18,6 +18,7 @@ import ac.grim.grimac.checks.impl.elytra.*;
 import ac.grim.grimac.checks.impl.exploit.ExploitA;
 import ac.grim.grimac.checks.impl.exploit.ExploitB;
 import ac.grim.grimac.checks.impl.groundspoof.NoFall;
+import ac.grim.grimac.checks.impl.interaction.InteractLineOfSight;
 import ac.grim.grimac.checks.impl.misc.ClientBrand;
 import ac.grim.grimac.checks.impl.misc.GhostBlockMitigation;
 import ac.grim.grimac.checks.impl.misc.Post;
@@ -213,6 +214,8 @@ public class CheckManager {
                 .put(FabricatedPlace.class, new FabricatedPlace(player))
                 .put(PositionPlace.class, new PositionPlace(player))
                 .put(RotationPlace.class, new RotationPlace(player))
+                .put(PlaceLineOfSight.class, new PlaceLineOfSight(player))
+                .put(InteractLineOfSight.class, new InteractLineOfSight(player))
                 .put(PacketOrderN.class, new PacketOrderN(player))
                 .put(DuplicateRotPlace.class, new DuplicateRotPlace(player))
                 .put(GhostBlockMitigation.class, new GhostBlockMitigation(player))
@@ -227,6 +230,7 @@ public class CheckManager {
                 .put(AirLiquidBreak.class, new AirLiquidBreak(player))
                 .put(WrongBreak.class, new WrongBreak(player))
                 .put(RotationBreak.class, new RotationBreak(player))
+                .put(BreakLineOfSight.class, new BreakLineOfSight(player))
                 .put(FastBreak.class, new FastBreak(player))
                 .put(MultiBreak.class, new MultiBreak(player))
                 .put(NoSwingBreak.class, new NoSwingBreak(player))

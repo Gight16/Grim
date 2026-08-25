@@ -90,6 +90,17 @@ Punishments:
       - "1:1 [log]"
       - "5:3 [webhook]"
       - "5:3 [proxy]"
+  BlockLineOfSight:
+    remove-violations-after: 300
+    checks:
+      - "PlaceLineOfSight"
+      - "BreakLineOfSight"
+      - "InteractLineOfSight"
+    commands:
+      - "5:3 [alert]"
+      - "1:1 [log]"
+      - "5:3 [webhook]"
+      - "5:3 [proxy]"
   Misc:
     remove-violations-after: 300
     checks:
@@ -104,6 +115,8 @@ Punishments:
       - "Elytra"
       - "Chat"
       - "Exploit"
+      - "!PlaceLineOfSight"
+      - "!BreakLineOfSight"
     commands:
       - "10:5 [alert]"
       - "1:1 [log]"
@@ -114,6 +127,7 @@ Punishments:
     checks:
       - "Interact"
       - "Aim"
+      - "!InteractLineOfSight"
     commands:
       - "20:40 [alert]"
       - "1:1 [log]"
