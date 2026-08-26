@@ -41,10 +41,14 @@ public class RotationPlace extends BlockPlaceCheck implements BlockPlaceListener
             return; // you don't send flying packets when spectating entities
         if (player.inVehicle()) return;
         if (flagBuffer > 0 && !didRayTraceHit(place)) {
-            ignorePost = true;
             // If the player hit and has flagged this check recently
-            if (flag(V.write(verbose()).bool(true)) && shouldModifyPackets() && shouldCancel()) {
+            boolean flagged = flag(V.write(verbose()).bool(true));
+            if (flagged && shouldModifyPackets() && shouldCancel()) {
                 place.resync();  // Deny the block placement.
+                // A cancelled place never reaches post flying, so don't arm ignorePost.
+                // Otherwise it leaks onto the next place and eats a real violation.
+            } else {
+                ignorePost = flagged;
             }
         }
     }
@@ -92,8 +96,11 @@ public class RotationPlace extends BlockPlaceCheck implements BlockPlaceListener
             maxEyeHeight = Math.max(maxEyeHeight, height);
         }
 
+        // Don't give 0.03 lenience if the player is a 1.8 player and we know they couldn't have 0.03'd because idle packet
+        double movementThreshold = !player.packetStateData.didLastMovementIncludePosition || player.canSkipTicks() ? player.getMovementThreshold() : 0;
+
         SimpleCollisionBox eyePositions = new SimpleCollisionBox(player.x, player.y + minEyeHeight, player.z, player.x, player.y + maxEyeHeight, player.z);
-        eyePositions.expand(player.getMovementThreshold());
+        eyePositions.expand(movementThreshold);
 
         // If the player is inside a block, then they can ray trace through the block and hit the other side of the block
         if (eyePositions.isIntersected(box)) {

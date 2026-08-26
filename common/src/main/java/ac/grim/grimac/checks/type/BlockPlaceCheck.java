@@ -53,7 +53,7 @@ public class BlockPlaceCheck extends Check {
     @Override
     public void onReload(@NotNull ConfigManager config) {
         if (getConfigName() != null) {
-            this.cancelVL = config.getIntElse(getConfigName() + ".cancelVL", getDefaultCancelVL());
+            this.cancelVL = config.getIntElse(getConfigName() + ".cancelvl", getDefaultCancelVL());
         }
     }
 
