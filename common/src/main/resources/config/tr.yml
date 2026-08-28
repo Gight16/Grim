@@ -185,7 +185,15 @@ Reach:
 AttackLineOfSight:
     # Extra target hitbox margin used only for line-of-sight ray tracing, never reach distance.
     hitbox-expansion: 0.03
+    # false: yalnızca hareketi de engelleyen bloklar ışını keser (en az yanlış pozitif).
+    # true: istemcinin işaretleyebildiği her blok ışını keser (vanilla ışın izlemeye daha yakın)
+    # ve tüm olası göz konumlarından tamamen gizli hedeflere yapılan vuruşlar erkenden düşürülür.
+    strict: true
     block-invalid-hits: true
+    # Sunucunun henüz onaylamadığı istemci taraflı kapı/kapak/çit kapısı açılışına bağlı vuruşları
+    # (flag atmadan) iptal et. Koruma eklentilerinin kapalı tuttuğu kapıları onay penceresi
+    # süresince korur.
+    block-unconfirmed-openables: true
     # Violations required before cancelling the hit. 0 cancels from the first detection, -1 never cancels.
     cancelvl: 0
     decay: 0.05

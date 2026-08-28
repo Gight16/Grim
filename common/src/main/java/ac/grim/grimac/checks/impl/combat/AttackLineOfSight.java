@@ -16,6 +16,7 @@ import ac.grim.grimac.utils.data.HitData;
 import ac.grim.grimac.utils.data.Pair;
 import ac.grim.grimac.utils.data.packetentity.PacketEntity;
 import ac.grim.grimac.utils.data.packetentity.dragon.PacketEntityEnderDragonPart;
+import ac.grim.grimac.utils.math.GrimMath;
 import ac.grim.grimac.utils.math.Vector3dm;
 import ac.grim.grimac.utils.nmsutil.ReachUtils;
 import ac.grim.grimac.utils.nmsutil.WorldRayTrace;
@@ -25,26 +26,24 @@ import com.github.retrooper.packetevents.protocol.packettype.PacketType;
 import com.github.retrooper.packetevents.protocol.player.ClientVersion;
 import com.github.retrooper.packetevents.protocol.player.GameMode;
 import com.github.retrooper.packetevents.protocol.world.BlockFace;
+import com.github.retrooper.packetevents.protocol.world.states.WrappedBlockState;
 import com.github.retrooper.packetevents.util.Vector3d;
 import com.github.retrooper.packetevents.util.Vector3i;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientAttack;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientInteractEntity;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
-import it.unimi.dsi.fastutil.ints.IntSet;
 import org.jetbrains.annotations.NotNull;
 
 @CheckData(
         name = "AttackLineOfSight",
         stableKey = "grim.combat.attack_line_of_sight",
         description = "Attacked an entity outside the player's line of sight",
-        setback = -1,
-        experimental = true)
+        setback = 0)
 public class AttackLineOfSight extends Check implements PacketReceiveListener {
     private static final int AIM_MISS = 0;
     private static final int BLOCKED = 1;
-    private static final int MAX_ANALYZED_TARGETS = 10;
+    private static final int MAX_ANALYZED_ATTACKS = 16;
     private static final double MAX_TRACE_DISTANCE = 16;
     private static final double DIRECTION_EPSILON = 1.0E-12;
     private static final double BLOCK_HIT_EPSILON = 1.0E-7;
@@ -52,11 +51,20 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
     private static final Verbose V = Verbose.of("reason=miss, type={entity}")
             .or("reason=block, type={entity}, block={block}, pos={mcpos}, distance={f64:%.3f}");
 
-    private final Int2ObjectMap<QueuedAttack> attackQueue = new Int2ObjectOpenHashMap<>();
-    private final IntSet analyzedTargets = new IntOpenHashSet();
+    // Fractions of the target box's extent sampled by the full-occlusion test; center first so a
+    // plainly visible target exits after a single ray.
+    private static final double[] OCCLUSION_SAMPLE_FACTORS = {0.5, 0.05, 0.95};
+
+    private final Int2ObjectMap<AttackPosition> attackQueue = new Int2ObjectOpenHashMap<>();
+    private int analyzedAttacks;
     private final SimpleCollisionBox[] blockCollisionBoxes =
             new SimpleCollisionBox[ComplexCollisionBox.DEFAULT_MAX_COLLISION_BOX_SIZE];
+    // Set by findBlockingHit when a ray is only blocked by the server-side state of an openable
+    // whose client-side toggle the server has not confirmed yet.
+    private HitData unconfirmedHit;
     private boolean blockInvalidHits;
+    private boolean blockUnconfirmedOpenables;
+    private boolean strict;
     private int cancelVL;
     private double hitboxExpansion;
 
@@ -66,9 +74,9 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
 
     @Override
     public void onPacketReceive(PacketReceiveEvent event) {
-        if (!isEnabled() || !player.isExperimentalChecks() || player.disableGrim) {
+        if (!isEnabled() || player.disableGrim) {
             attackQueue.clear();
-            analyzedTargets.clear();
+            analyzedAttacks = 0;
             return;
         }
 
@@ -88,55 +96,92 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
     }
 
     private void queueAttack(PacketReceiveEvent event, int entityId) {
-        if (event.isCancelled() || player.getSetbackTeleportUtil().shouldBlockMovement()) return;
-        if (player.uncertaintyHandler.lastTeleportTicks.hasOccurredSince(1)) return;
-        // One analysis per target and bounded distinct targets per tick prevents attack-spam CPU abuse.
-        if (analyzedTargets.contains(entityId) || analyzedTargets.size() >= MAX_ANALYZED_TARGETS) return;
+        if (event.isCancelled()) return;
+
+        // A setback in progress means the claimed position is already rejected; forwarding
+        // unanalyzed attacks here would turn every setback into a free-hit window.
+        if (player.getSetbackTeleportUtil().shouldBlockMovement()) {
+            cancelUnanalyzed(event);
+            return;
+        }
+
+        // Every attack is analyzed, including repeats on the same target — a repeat forwarded on
+        // the first packet's verdict would sail through a hit that was just cancelled. The budget
+        // bounds ray tracing per flush so packet spam cannot become a CPU sink, and no vanilla
+        // client sends this many attacks between movement updates, so exceeding it is cancelled
+        // instead of forwarded: the cap must not be a bypass either.
+        if (analyzedAttacks >= MAX_ANALYZED_ATTACKS) {
+            cancelUnanalyzed(event);
+            return;
+        }
 
         PacketEntity entity = player.compensatedEntities.entityMap.get(entityId);
-        if (!canCheck(entity) || entity.hasRecentlyTeleported()) return;
-        analyzedTargets.add(entityId);
+        if (!canCheck(entity)) return;
+
+        // Attack-time geometry is unreliable around teleports. Strict mode refuses to forward
+        // what it cannot analyze; lenient mode keeps the exemption.
+        if (player.uncertaintyHandler.lastTeleportTicks.hasOccurredSince(1) || entity.hasRecentlyTeleported()) {
+            if (strict) cancelUnanalyzed(event);
+            return;
+        }
+        analyzedAttacks++;
 
         AttackPosition attack = new AttackPosition(
                 player.x, player.y, player.z,
                 player.lastX, player.lastY, player.lastZ);
 
         // Snapshot attack-time world/entity state. Delayed retry only adds lenience for packet-order ambiguity.
-        LineOfSightResult initialResult = checkLineOfSight(getTargetBox(entity), attack);
+        SimpleCollisionBox targetBox = getTargetBox(entity);
+        LineOfSightResult initialResult = checkLineOfSight(targetBox, attack);
         if (initialResult.unloaded()
-                || initialResult.hitTarget() && initialResult.blockingHit() == null) {
+                || initialResult.hitTarget() && initialResult.blockingHit() == null && !initialResult.unconfirmed()) {
             attackQueue.remove(entityId);
             reward();
             return;
         }
 
         if (initialResult.hitTarget()) {
-            if (flagBlocked(entity, initialResult, false) && shouldCancelHit()) {
+            if (initialResult.unconfirmed()) {
+                // Only the unconfirmed server-side state of a client-toggled openable blocks this
+                // hit. It becomes legal if the server accepts the toggle, so cancel without a flag.
+                if (blockInvalidHits && shouldModifyPackets()) {
+                    event.setCancelled(true);
+                    player.onPacketCancel();
+                }
+            } else if (flagBlocked(entity, initialResult, false) && shouldCancelHit()) {
                 event.setCancelled(true);
                 player.onPacketCancel();
             }
             return;
         }
 
-        attackQueue.put(entityId, new QueuedAttack(attack, initialResult));
+        // No candidate ray touched the target box. When the whole box is hidden from every possible
+        // eye position, no look packet arriving later can make this hit legal either; drop it now
+        // instead of forwarding it and enforcing retroactively. Cancel only: the sampled visibility
+        // test is not exhaustive enough to be flag evidence.
+        if (strict && blockInvalidHits && shouldModifyPackets() && isFullyOccluded(targetBox, attack)) {
+            event.setCancelled(true);
+            player.onPacketCancel();
+            return;
+        }
+
+        attackQueue.put(entityId, attack);
     }
 
     private void checkQueuedAttacks() {
-        for (Int2ObjectMap.Entry<QueuedAttack> attack : attackQueue.int2ObjectEntrySet()) {
+        for (Int2ObjectMap.Entry<AttackPosition> attack : attackQueue.int2ObjectEntrySet()) {
             PacketEntity entity = player.compensatedEntities.entityMap.get(attack.getIntKey());
             if (!canCheck(entity) || entity.hasRecentlyTeleported()
                     || player.uncertaintyHandler.lastTeleportTicks.hasOccurredSince(1)) {
                 continue;
             }
 
-            QueuedAttack queued = attack.getValue();
-            LineOfSightResult result = checkLineOfSight(getTargetBox(entity), queued.position());
-            if (result.unloaded()) {
+            LineOfSightResult result = checkLineOfSight(getTargetBox(entity), attack.getValue());
+            if (result.unloaded() || result.unconfirmed()) {
+                // Unloaded chunks, or a pending openable toggle the hit may become legal through.
                 continue;
             } else if (result.hitTarget() && result.blockingHit() == null) {
                 reward();
-            } else if (queued.initialResult().hitTarget()) {
-                flagBlocked(entity, queued.initialResult(), true);
             } else if (result.hitTarget()) {
                 flagBlocked(entity, result, true);
             } else {
@@ -147,7 +192,7 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
         }
 
         attackQueue.clear();
-        analyzedTargets.clear();
+        analyzedAttacks = 0;
     }
 
     /**
@@ -200,10 +245,11 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
     private LineOfSightResult checkLineOfSight(SimpleCollisionBox targetBox, AttackPosition attack) {
         // Cap only exempts analysis. It cannot turn distance into a flag.
         if (minimumDistanceSquared(targetBox, attack) > MAX_TRACE_DISTANCE * MAX_TRACE_DISTANCE) {
-            return new LineOfSightResult(true, null, 0, false);
+            return new LineOfSightResult(true, null, 0, false, false);
         }
 
         boolean hitTarget = false;
+        boolean sawUnconfirmed = false;
         HitData closestBlock = null;
         double closestBlockDistance = Double.MAX_VALUE;
         int lookCount = player.getClientVersion().isOlderThan(ClientVersion.V_1_8) ? 1
@@ -229,7 +275,7 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
 
                     // Analysis cap only exempts distant targets; it never flags or enforces reach.
                     if (intersection > MAX_TRACE_DISTANCE) {
-                        return new LineOfSightResult(true, null, 0, false);
+                        return new LineOfSightResult(true, null, 0, false, false);
                     }
 
                     // No reach threshold: ray ends only where it first enters target hitbox.
@@ -239,9 +285,15 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
                             direction.getZ() * intersection);
                     HitData blockingHit = findBlockingHit(eye, targetHit);
                     if (blockingHit == UNLOADED) {
-                        return new LineOfSightResult(true, null, 0, true);
+                        return new LineOfSightResult(true, null, 0, true, false);
                     } else if (blockingHit == null) {
-                        return new LineOfSightResult(true, null, 0, false);
+                        if (unconfirmedHit == null) {
+                            return new LineOfSightResult(true, null, 0, false, false);
+                        }
+                        // Blocked only by an unconfirmed openable toggle: this candidate neither
+                        // exonerates the hit nor proves it impossible.
+                        sawUnconfirmed = true;
+                        continue;
                     }
 
                     double blockDistance = Vector3dm.from(eye).distance(blockingHit.blockHitLocation());
@@ -253,7 +305,7 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
             }
         }
 
-        return new LineOfSightResult(hitTarget, closestBlock, closestBlockDistance, false);
+        return new LineOfSightResult(hitTarget, closestBlock, closestBlockDistance, false, sawUnconfirmed);
     }
 
     private double minimumDistanceSquared(SimpleCollisionBox box, AttackPosition attack) {
@@ -320,57 +372,134 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
 
     private HitData findBlockingHit(Vector3d start, Vector3d targetHit) {
         double targetDistance = start.distance(targetHit);
+        int eyeX = GrimMath.floor(start.getX());
+        int eyeY = GrimMath.floor(start.getY());
+        int eyeZ = GrimMath.floor(start.getZ());
+        unconfirmedHit = null;
 
         return WorldRayTrace.traverseBlocks(player, start, targetHit, (state, pos) -> {
             if (!player.compensatedWorld.isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) {
                 return UNLOADED;
             }
 
-            CollisionBox movementCollision = CollisionData.getData(state.getType())
-                    .getMovementCollisionBox(
-                            player,
-                            player.getClientVersion(),
-                            state,
-                            pos.getX(),
-                            pos.getY(),
-                            pos.getZ());
-            if (movementCollision.isNull()) return null;
+            HitData hit = occlusionHit(state, pos, start, targetHit, targetDistance, eyeX, eyeY, eyeZ);
+            if (hit != null) return hit;
 
-            // Use ray-pick geometry only after confirming this is a collidable block.
-            CollisionBox collision = HitboxData.getBlockHitbox(
-                    player,
-                    null,
-                    player.getClientVersion(),
-                    state,
-                    false,
-                    pos.getX(),
-                    pos.getY(),
-                    pos.getZ());
-            int size = collision.downCast(blockCollisionBoxes);
-            double closestDistance = Double.MAX_VALUE;
-            Vector3d closestHit = null;
-            BlockFace closestFace = null;
-
-            for (int i = 0; i < size; i++) {
-                SimpleCollisionBox box = blockCollisionBoxes[i];
-                Pair<Vector3d, BlockFace> intercept = ReachUtils.calculateIntercept(box, start, targetHit);
-                if (intercept.first() == null) continue;
-                double distance = start.distance(intercept.first());
-                if (distance <= BLOCK_HIT_EPSILON
-                        || distance + BLOCK_HIT_EPSILON >= targetDistance
-                        || distance >= closestDistance) {
-                    continue;
+            // The client toggled this openable and the server has not confirmed it; a hit that is
+            // only clear through the predicted state must also survive the server's state.
+            if (blockUnconfirmedOpenables && unconfirmedHit == null) {
+                WrappedBlockState original = player.compensatedWorld
+                        .getUnconfirmedOpenableOriginal(pos.getX(), pos.getY(), pos.getZ());
+                if (original != null && original.getGlobalId() != state.getGlobalId()) {
+                    unconfirmedHit = occlusionHit(original, pos, start, targetHit, targetDistance, eyeX, eyeY, eyeZ);
                 }
+            }
+            return null;
+        });
+    }
 
-                closestDistance = distance;
-                closestHit = intercept.first();
-                closestFace = intercept.second();
+    private HitData occlusionHit(
+            WrappedBlockState state,
+            Vector3i pos,
+            Vector3d start,
+            Vector3d targetHit,
+            double targetDistance,
+            int eyeX,
+            int eyeY,
+            int eyeZ) {
+        CollisionBox movementCollision = CollisionData.getData(state.getType())
+                .getMovementCollisionBox(
+                        player,
+                        player.getClientVersion(),
+                        state,
+                        pos.getX(),
+                        pos.getY(),
+                        pos.getZ());
+        if (movementCollision.isNull()) {
+            // Lenient mode only trusts blocks that also stop movement, so mismodelled
+            // outline-only shapes (plants, carpets, ViaVersion replacements) can't false.
+            if (!strict) return null;
+            // An outline-only shape sharing the eye's block cannot occlude a vanilla pick ray.
+            if (pos.getX() == eyeX && pos.getY() == eyeY && pos.getZ() == eyeZ) return null;
+        }
+
+        // Use ray-pick geometry only after confirming this block occludes at all.
+        CollisionBox collision = HitboxData.getBlockHitbox(
+                player,
+                null,
+                player.getClientVersion(),
+                state,
+                false,
+                pos.getX(),
+                pos.getY(),
+                pos.getZ());
+        int size = collision.downCast(blockCollisionBoxes);
+        double closestDistance = Double.MAX_VALUE;
+        Vector3d closestHit = null;
+        BlockFace closestFace = null;
+
+        for (int i = 0; i < size; i++) {
+            SimpleCollisionBox box = blockCollisionBoxes[i];
+            Pair<Vector3d, BlockFace> intercept = ReachUtils.calculateIntercept(box, start, targetHit);
+            if (intercept.first() == null) continue;
+            double distance = start.distance(intercept.first());
+            if (distance <= BLOCK_HIT_EPSILON
+                    || distance + BLOCK_HIT_EPSILON >= targetDistance
+                    || distance >= closestDistance) {
+                continue;
             }
 
-            return closestHit == null
-                    ? null
-                    : new HitData(pos, Vector3dm.from(closestHit), closestFace, state);
-        });
+            closestDistance = distance;
+            closestHit = intercept.first();
+            closestFace = intercept.second();
+        }
+
+        return closestHit == null
+                ? null
+                : new HitData(pos, Vector3dm.from(closestHit), closestFace, state);
+    }
+
+    /**
+     * True when every sampled point of the target box is behind a confirmed occluder from every
+     * possible eye candidate. Sampling can miss thin gaps, so callers may only cancel on this,
+     * never flag.
+     */
+    private boolean isFullyOccluded(SimpleCollisionBox targetBox, AttackPosition attack) {
+        for (int positionIndex = 0; positionIndex < 2; positionIndex++) {
+            double x = positionIndex == 0 ? attack.x() : attack.lastX();
+            double y = positionIndex == 0 ? attack.y() : attack.lastY();
+            double z = positionIndex == 0 ? attack.z() : attack.lastZ();
+
+            for (double eyeHeight : player.getPossibleEyeHeights()) {
+                Vector3d eye = new Vector3d(x, y + eyeHeight, z);
+
+                for (double factorX : OCCLUSION_SAMPLE_FACTORS) {
+                    for (double factorY : OCCLUSION_SAMPLE_FACTORS) {
+                        for (double factorZ : OCCLUSION_SAMPLE_FACTORS) {
+                            // Corners + center: the corner samples sit slightly inset so a ray
+                            // grazing a coplanar occluder face cannot mask real visibility.
+                            boolean corner = factorX != 0.5 && factorY != 0.5 && factorZ != 0.5;
+                            boolean center = factorX == 0.5 && factorY == 0.5 && factorZ == 0.5;
+                            if (!corner && !center) continue;
+
+                            Vector3d point = new Vector3d(
+                                    targetBox.minX + factorX * (targetBox.maxX - targetBox.minX),
+                                    targetBox.minY + factorY * (targetBox.maxY - targetBox.minY),
+                                    targetBox.minZ + factorZ * (targetBox.maxZ - targetBox.minZ));
+                            // Beyond the analysis cap no conclusion is possible; never treat the
+                            // cap as occlusion evidence.
+                            if (eye.distance(point) > MAX_TRACE_DISTANCE) return false;
+
+                            HitData hit = findBlockingHit(eye, point);
+                            // Visible, unloaded, or blocked only by an unconfirmed openable
+                            // toggle: not proof the whole box is hidden.
+                            if (hit == null || hit == UNLOADED) return false;
+                        }
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     // Cancellation is instant: the offending ATTACK packet is dropped in the same receive call.
@@ -378,9 +507,20 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
         return blockInvalidHits && cancelVL >= 0 && violations >= cancelVL && shouldModifyPackets();
     }
 
+    // For attacks that cannot be analyzed at all: dropped without a flag, since inability to
+    // analyze is not evidence of cheating.
+    private void cancelUnanalyzed(PacketReceiveEvent event) {
+        if (blockInvalidHits && shouldModifyPackets()) {
+            event.setCancelled(true);
+            player.onPacketCancel();
+        }
+    }
+
     @Override
     public void onReload(@NotNull ConfigManager config) {
         blockInvalidHits = config.getBooleanElse("AttackLineOfSight.block-invalid-hits", true);
+        blockUnconfirmedOpenables = config.getBooleanElse("AttackLineOfSight.block-unconfirmed-openables", true);
+        strict = config.getBooleanElse("AttackLineOfSight.strict", true);
         cancelVL = config.getIntElse("AttackLineOfSight.cancelvl", 0);
         hitboxExpansion = Math.max(0, config.getDoubleElse("AttackLineOfSight.hitbox-expansion", 0.03));
     }
@@ -393,11 +533,10 @@ public class AttackLineOfSight extends Check implements PacketReceiveListener {
             double lastY,
             double lastZ) {}
 
-    private record QueuedAttack(AttackPosition position, LineOfSightResult initialResult) {}
-
     private record LineOfSightResult(
             boolean hitTarget,
             HitData blockingHit,
             double blockDistance,
-            boolean unloaded) {}
+            boolean unloaded,
+            boolean unconfirmed) {}
 }

@@ -190,7 +190,14 @@ Reach:
 AttackLineOfSight:
     # Extra target hitbox margin used only for line-of-sight ray tracing, never reach distance.
     hitbox-expansion: 0.03
+    # false: only blocks that also stop movement can occlude the ray (fewest false positives).
+    # true: every block the client can pick occludes, matching vanilla ray tracing more closely,
+    # and attacks on targets fully hidden from every possible eye position are dropped early.
+    strict: true
     block-invalid-hits: true
+    # Cancel (without flagging) hits that only connect if the server accepts a client-side
+    # door/trapdoor/fence gate toggle it has not confirmed yet.
+    block-unconfirmed-openables: true
     # Violations required before cancelling the hit. 0 cancels from the first detection, -1 never cancels.
     cancelvl: 0
     decay: 0.05

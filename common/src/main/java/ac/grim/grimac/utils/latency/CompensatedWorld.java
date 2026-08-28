@@ -56,6 +56,7 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectLinkedOpenHashMap;
 import lombok.Getter;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.HashSet;
 import java.util.Iterator;
@@ -89,6 +90,12 @@ public class CompensatedWorld implements PacketWorld {
     private final Int2ObjectMap<List<Vector3i>> serverIsCurrentlyProcessingThesePredictions = new Int2ObjectOpenHashMap<>();
     private final Object2ObjectLinkedOpenHashMap<Pair<Vector3i, DiggingAction>, Vector3d> unackedActions = new Object2ObjectLinkedOpenHashMap<>();
     private boolean isCurrentlyPredicting = false;
+    // Client-side openable (door/trapdoor/fence gate) toggles the server has not confirmed yet.
+    // Value is the last server-authoritative block id; entries are cleared by the prediction ack
+    // or a server block update, and expire as a fallback so stale entries cannot linger.
+    private static final int OPENABLE_CONFIRMATION_TIMEOUT_TICKS = 20;
+    private final Long2ObjectOpenHashMap<UnconfirmedOpenable> unconfirmedOpenables = new Long2ObjectOpenHashMap<>();
+    private boolean isTickingOpenable = false;
     public boolean isRaining = false;
 
     private final boolean noNegativeBlocks;
@@ -149,6 +156,8 @@ public class CompensatedWorld implements PacketWorld {
     }
 
     private void handleAck(Vector3i vector3i, int originalBlockId, Vector3d playerPosition) {
+        // The server has resolved this position; any pending openable toggle here is decided.
+        unconfirmedOpenables.remove(vector3i.getSerializedPosition());
         // If we need to change the world block state
         if (getBlock(vector3i).getGlobalId() != originalBlockId) {
             player.blockHistory.add(
@@ -283,6 +292,11 @@ public class CompensatedWorld implements PacketWorld {
             return;
         }
 
+        // A server-authoritative write resolves any pending openable toggle at this position.
+        if (!isCurrentlyPredicting && !isTickingOpenable && !unconfirmedOpenables.isEmpty()) {
+            unconfirmedOpenables.remove(asVector.getSerializedPosition());
+        }
+
         Column column = getChunk(x >> 4, z >> 4);
 
         // Apply 1.17 expanded world offset
@@ -320,36 +334,76 @@ public class CompensatedWorld implements PacketWorld {
     public void tickOpenable(int blockX, int blockY, int blockZ) {
         final WrappedBlockState data = getBlock(blockX, blockY, blockZ);
         final StateType type = data.getType();
-        if (Materials.isClientSideOpenableDoor(type, player.getClientVersion())) {
-            WrappedBlockState otherDoor = getBlock(blockX,
-                    blockY + (data.getHalf() == Half.LOWER ? 1 : -1), blockZ);
+        // The updateBlock calls below are the client's own prediction, not server authority; the
+        // flag keeps them from clearing the unconfirmed-toggle entries recorded here.
+        isTickingOpenable = true;
+        try {
+            if (Materials.isClientSideOpenableDoor(type, player.getClientVersion())) {
+                WrappedBlockState otherDoor = getBlock(blockX,
+                        blockY + (data.getHalf() == Half.LOWER ? 1 : -1), blockZ);
 
-            if (PacketEvents.getAPI().getServerManager().getVersion().isNewerThanOrEquals(ServerVersion.V_1_13)) {
-                if (BlockTags.DOORS.contains(otherDoor.getType())) {
-                    otherDoor.setOpen(!otherDoor.isOpen());
-                    updateBlock(blockX, blockY + (data.getHalf() == Half.LOWER ? 1 : -1), blockZ, otherDoor.getGlobalId());
-                }
-                data.setOpen(!data.isOpen());
-                updateBlock(blockX, blockY, blockZ, data.getGlobalId());
-            } else {
-                // 1.12 attempts to change the bottom half of the door first
-                if (data.getHalf() == Half.LOWER) {
+                if (PacketEvents.getAPI().getServerManager().getVersion().isNewerThanOrEquals(ServerVersion.V_1_13)) {
+                    if (BlockTags.DOORS.contains(otherDoor.getType())) {
+                        recordUnconfirmedToggle(blockX, blockY + (data.getHalf() == Half.LOWER ? 1 : -1), blockZ, otherDoor.getGlobalId());
+                        otherDoor.setOpen(!otherDoor.isOpen());
+                        updateBlock(blockX, blockY + (data.getHalf() == Half.LOWER ? 1 : -1), blockZ, otherDoor.getGlobalId());
+                    }
+                    recordUnconfirmedToggle(blockX, blockY, blockZ, data.getGlobalId());
                     data.setOpen(!data.isOpen());
                     updateBlock(blockX, blockY, blockZ, data.getGlobalId());
-                } else if (BlockTags.DOORS.contains(otherDoor.getType()) && otherDoor.getHalf() == Half.LOWER) {
-                    // Then tries setting the first bit of whatever is below it, disregarding its type
-                    otherDoor.setOpen(!otherDoor.isOpen());
-                    updateBlock(blockX, blockY - 1, blockZ, otherDoor.getGlobalId());
+                } else {
+                    // 1.12 attempts to change the bottom half of the door first
+                    if (data.getHalf() == Half.LOWER) {
+                        recordUnconfirmedToggle(blockX, blockY, blockZ, data.getGlobalId());
+                        data.setOpen(!data.isOpen());
+                        updateBlock(blockX, blockY, blockZ, data.getGlobalId());
+                    } else if (BlockTags.DOORS.contains(otherDoor.getType()) && otherDoor.getHalf() == Half.LOWER) {
+                        // Then tries setting the first bit of whatever is below it, disregarding its type
+                        recordUnconfirmedToggle(blockX, blockY - 1, blockZ, otherDoor.getGlobalId());
+                        otherDoor.setOpen(!otherDoor.isOpen());
+                        updateBlock(blockX, blockY - 1, blockZ, otherDoor.getGlobalId());
+                    }
                 }
+            } else if (Materials.isClientSideOpenableTrapdoor(type, player.getClientVersion()) || BlockTags.FENCE_GATES.contains(type)) {
+                // Take 12 most significant bytes -> the material ID.  Combine them with the new block magic data.
+                recordUnconfirmedToggle(blockX, blockY, blockZ, data.getGlobalId());
+                data.setOpen(!data.isOpen());
+                updateBlock(blockX, blockY, blockZ, data.getGlobalId());
+            } else if (BlockTags.BUTTONS.contains(type)) {
+                data.setPowered(true);
             }
-        } else if (Materials.isClientSideOpenableTrapdoor(type, player.getClientVersion()) || BlockTags.FENCE_GATES.contains(type)) {
-            // Take 12 most significant bytes -> the material ID.  Combine them with the new block magic data.
-            data.setOpen(!data.isOpen());
-            updateBlock(blockX, blockY, blockZ, data.getGlobalId());
-        } else if (BlockTags.BUTTONS.contains(type)) {
-            data.setPowered(true);
+        } finally {
+            isTickingOpenable = false;
         }
     }
+
+    private void recordUnconfirmedToggle(int x, int y, int z, int originalGlobalId) {
+        // Rapid re-toggles must not overwrite the true server state with an earlier prediction.
+        unconfirmedOpenables.putIfAbsent(new Vector3i(x, y, z).getSerializedPosition(),
+                new UnconfirmedOpenable(originalGlobalId,
+                        GrimAPI.INSTANCE.getTickManager().currentTick + OPENABLE_CONFIRMATION_TIMEOUT_TICKS));
+    }
+
+    /**
+     * The last server-authoritative state of an openable the client has toggled without server
+     * confirmation yet, or null when no unconfirmed toggle is pending at this position.
+     */
+    public @Nullable WrappedBlockState getUnconfirmedOpenableOriginal(int x, int y, int z) {
+        if (unconfirmedOpenables.isEmpty()) return null;
+        long key = new Vector3i(x, y, z).getSerializedPosition();
+        UnconfirmedOpenable entry = unconfirmedOpenables.get(key);
+        if (entry == null) return null;
+        if (GrimAPI.INSTANCE.getTickManager().currentTick > entry.expireTick()) {
+            unconfirmedOpenables.remove(key);
+            return null;
+        }
+        // A pending 1.19+ prediction tracks server corrections that arrived mid-window.
+        BlockPrediction prediction = originalServerBlocks.get(key);
+        int id = prediction != null ? prediction.getOriginalBlockId() : entry.originalGlobalId();
+        return WrappedBlockState.getByGlobalId(blockVersion, id);
+    }
+
+    private record UnconfirmedOpenable(int originalGlobalId, int expireTick) {}
 
     public void tickPlayerInPistonPushingArea() {
         player.uncertaintyHandler.tick();
